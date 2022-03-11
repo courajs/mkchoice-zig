@@ -1,0 +1,3 @@
+[submodule "mibu"]
+	path = mibu
+	url = git@github.com:courajs/mibu.git
