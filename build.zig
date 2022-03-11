@@ -15,6 +15,7 @@ pub fn build(b: *std.build.Builder) void {
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.addPackagePath("mibu", "mibu/src/main.zig");
+    exe.addPackagePath("args", "zig-args/args.zig");
     exe.install();
 
     const run_cmd = exe.run();
