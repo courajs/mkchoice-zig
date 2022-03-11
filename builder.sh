@@ -1,10 +1,9 @@
 source $stdenv/setup
-build_dir=`pwd`
 
-# https://github.com/ziglang/zig/issues/6810
-mkdir -p NIX_LOCAL_CACHE_HOME
-export XDG_CACHE_HOME="$build_dir/NIX_LOCAL_CACHE_HOME"
+global_cache=`mktemp -d`
 
-cd "$src"
-
-zig build install --prefix "$out" --cache-dir "$build_dir/zig-cache"
+zig build install \
+  --global-cache-dir "$global_cache" \
+  --cache-dir . \
+  --prefix "$out" \
+  --build-file "$src/build.zig"
