@@ -19,22 +19,28 @@ pub fn main() anyerror!void {
     // var selected = try present_choice(args);
     // std.log.err("{s}", .{selected});
 
-    try do_term_stuff();
+    var choice = try do_term_stuff();
+    if (choice) |c| {
+        try std.io.getStdOut().writeAll(c);
+    } else {
+        std.process.exit(1);
+    }
     // try research_reads();
 }
 
 // todo:
 // https://docs.rs/termion/latest/src/termion/input.rs.html#185-187
 
-fn do_term_stuff() !void {
+fn do_term_stuff() !?[]const u8 {
     const tty = try std.fs.openFileAbsolute("/dev/tty", .{ .read = true, .write = true });
     var raw = try mibu.term.RawTerm.enableRawMode(tty.handle, .blocking);
     defer raw.disableRawMode() catch {};
-
-    var buf = std.fifo.LinearFifo(u8, .{ .Static = 512 }).init();
     var reader = tty.reader();
     var writer = tty.writer();
-    _ = writer;
+    try writer.writeAll(mibu.cursor.hide());
+    defer writer.writeAll(mibu.cursor.show()) catch {};
+
+    var buf = std.fifo.LinearFifo(u8, .{ .Static = 512 }).init();
 
     var state = RenderInfo{
         .prompt = "Choose one:",
@@ -43,12 +49,10 @@ fn do_term_stuff() !void {
             "second",
             "third",
         },
-        .current_choice = 1,
+        .current_choice = 0,
     };
-    try state.write_prompt(writer);
-    try state.write_choices(writer);
+    try render(state, writer);
 
-    std.log.err("Waiting for first input\r", .{});
     var count = try reader.read(buf.writableSlice(0));
     buf.update(count);
 
@@ -60,7 +64,7 @@ fn do_term_stuff() !void {
                 buf.update(count);
             },
             .not_supported => {
-                std.log.err("Not supported byte sequence: {any}\r", .{buf.readableSlice(0)});
+                // std.log.err("Not supported byte sequence: {any}\r", .{buf.readableSlice(0)});
                 buf.discard(buf.count);
             },
             .incomplete => {
@@ -70,10 +74,47 @@ fn do_term_stuff() !void {
             },
             .event => |ev| {
                 buf.discard(ev.bytes_read);
-                std.log.err("Event ({} bytes): {}\r", .{ ev.bytes_read, ev.event });
+                switch (ev.event.key) {
+                    .ctrlC => return null,
+                    .escape => return null,
+                    .up => {
+                        state.up();
+                        try re_render(state, writer);
+                    },
+                    .down => {
+                        state.down();
+                        try re_render(state, writer);
+                    },
+                    .ctrlM, .ctrlJ => return state.get_choice(),
+                    .char => |c| switch (c) {
+                        ' ' => return state.get_choice(),
+                        'j' => {
+                            state.down();
+                            try re_render(state, writer);
+                        },
+                        'k' => {
+                            state.up();
+                            try re_render(state, writer);
+                        },
+                        else => {},
+                    },
+                    else => {},
+                }
             },
         }
     }
+}
+
+fn render(state: RenderInfo, writer: anytype) !void {
+    try state.write_prompt(writer);
+    try state.write_choices(writer);
+}
+fn re_render(state: RenderInfo, writer: anytype) !void {
+    var rendered_choice_height = state.choice_height(try mibu.term.getSize());
+    try writer.writeByte('\r');
+    try writer.writeAll(mibu.cursor.goUp(rendered_choice_height));
+    try writer.writeAll(mibu.clear.screen_from_cursor);
+    try state.write_choices(writer);
 }
 
 fn research_reads() !void {
@@ -165,6 +206,10 @@ const RenderInfo = struct {
     choices: []const []const u8,
     current_choice: usize,
 
+    pub fn get_choice(self: Self) []const u8 {
+        return self.choices[self.current_choice];
+    }
+
     pub fn up(self: *Self) void {
         if (self.current_choice > 0) {
             self.current_choice -= 1;
@@ -200,6 +245,7 @@ const RenderInfo = struct {
                 height += str_height_prefixed(2, choice, term_size.width);
             }
         }
+        return height;
     }
 };
 
