@@ -33,6 +33,21 @@ fn do_term_stuff() !void {
 
     var buf = std.fifo.LinearFifo(u8, .{ .Static = 512 }).init();
     var reader = tty.reader();
+    var writer = tty.writer();
+    _ = writer;
+
+    var state = RenderInfo{
+        .prompt = "Choose one:",
+        .choices = &[_][]const u8{
+            "first",
+            "second",
+            "third",
+        },
+        .current_choice = 1,
+    };
+    try state.write_prompt(writer);
+    try state.write_choices(writer);
+
     std.log.err("Waiting for first input\r", .{});
     var count = try reader.read(buf.writableSlice(0));
     buf.update(count);
@@ -141,6 +156,72 @@ fn read_args(alloc: std.mem.Allocator) !Args {
         .opts = args.options,
         .choices = choices,
     };
+}
+
+const RenderInfo = struct {
+    const Self = @This();
+
+    prompt: []const u8,
+    choices: []const []const u8,
+    current_choice: usize,
+
+    pub fn up(self: *Self) void {
+        if (self.current_choice > 0) {
+            self.current_choice -= 1;
+        }
+    }
+    pub fn down(self: *Self) void {
+        if (self.current_choice < (self.choices.len - 1)) {
+            self.current_choice += 1;
+        }
+    }
+
+    pub fn write_prompt(self: Self, writer: anytype) !void {
+        try writer.print("{s}\r\n", .{self.prompt});
+    }
+    pub fn write_choices(self: Self, writer: anytype) !void {
+        for (self.choices) |choice, i| {
+            if (i == self.current_choice) {
+                try writer.print("{s}>  {s}{s}\r\n", .{ mibu.color.fg(.green), choice, mibu.color.reset });
+            } else {
+                try writer.print("  {s}\r\n", .{choice});
+            }
+        }
+    }
+    pub fn full_height(self: Self, term_size: mibu.term.TermSize) usize {
+        return str_height(self.prompt) + self.choice_height(term_size);
+    }
+    pub fn choice_height(self: Self, term_size: mibu.term.TermSize) usize {
+        var height: usize = 0;
+        for (self.choices) |choice, i| {
+            if (i == self.current_choice) {
+                height += str_height_prefixed(3, choice, term_size.width);
+            } else {
+                height += str_height_prefixed(2, choice, term_size.width);
+            }
+        }
+    }
+};
+
+fn str_height_prefixed(prefix_length: usize, s: []const u8, terminal_width: u16) usize {
+    var height: usize = 0;
+    var lines = std.mem.split(u8, s, "\r\n");
+    if (lines.next()) |line| {
+        height += 1;
+        height += (prefix_length + str_width(line)) / terminal_width;
+    }
+    while (lines.next()) |line| {
+        height += 1;
+        height += str_width(line) / terminal_width;
+    }
+    return height;
+}
+fn str_height(s: []const u8, terminal_width: u16) usize {
+    return str_height_prefixed(0, s, terminal_width);
+}
+fn str_width(s: []const u8) usize {
+    // Todo: unicode & wide character support
+    return s.len;
 }
 
 const Options = struct {
