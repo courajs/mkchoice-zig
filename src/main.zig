@@ -2,6 +2,8 @@ const std = @import("std");
 const mibu = @import("mibu"); // https://github.com/xyaman/mibu
 const args_parser = @import("args"); // https://github.com/MasterQ32/zig-args
 
+const input = @import("./input.zig");
+
 const Alloc = std.mem.Allocator;
 
 pub fn main() anyerror!u8 {
@@ -9,17 +11,10 @@ pub fn main() anyerror!u8 {
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
     var alloc = arena.allocator();
-    _ = alloc;
 
-    // var args = try read_args(alloc);
-    // const args = Args{
-    //     .opts = Options{},
-    //     .choices = &[_][]const u8{ "a", "b", "c" },
-    // };
-    // var selected = try present_choice(args);
-    // std.log.err("{s}", .{selected});
+    var args = try read_args(alloc);
 
-    var choice = try do_term_stuff();
+    var choice = try do_term_stuff(args);
     if (choice) |c| {
         try std.io.getStdOut().writeAll(c);
         return 0;
@@ -28,57 +23,50 @@ pub fn main() anyerror!u8 {
     }
 }
 
+const RawInputReader = struct {
+    pub const Self = @This();
+    pub const Buffer = std.fifo.LinearFifo(u8, .{ .Static = 512 });
+
+    tty: std.fs.File,
+    buf: Buffer,
+    raw: mibu.term.RawTerm,
+
+    pub fn init(tty: std.fs.File) !Self {
+        var raw = mibu.term.RawTerm.enableRawMode(tty.handle, .blocking);
+        try tty.writeAll(mibu.cursor.hide());
+        return Self{
+            .tty = tty,
+            .raw = raw,
+            .buf = Buffer.init(),
+        };
+    }
+
+    pub fn deinit(self: Self) !void {
+        try self.tty.writeAll(mibu.cursor.show());
+        try self.raw.disableRawMode();
+    }
+};
+
 // todo:
 // https://docs.rs/termion/latest/src/termion/input.rs.html#185-187
 
-fn do_term_stuff() !?[]const u8 {
-    const tty = try std.fs.openFileAbsolute("/dev/tty", .{ .read = true, .write = true });
-    var raw = try mibu.term.RawTerm.enableRawMode(tty.handle, .blocking);
-    defer raw.disableRawMode() catch {};
-    var reader = tty.reader();
-    var writer = tty.writer();
-    try writer.writeAll(mibu.cursor.hide());
-    defer writer.writeAll(mibu.cursor.show()) catch {};
-
-    var buf = std.fifo.LinearFifo(u8, .{ .Static = 512 }).init();
+fn do_term_stuff(args: Args) !?[]const u8 {
+    var tty = try std.fs.openFileAbsolute("/dev/tty", .{ .read = true, .write = true });
+    var user_input = try input.RawInputReader.init(tty);
+    defer user_input.deinit() catch {};
 
     var state = RenderInfo{
-        .prompt = "Choose one:",
-        .choices = &[_][]const u8{
-            "first",
-            "second",
-            "third",
-        },
+        .prompt = args.opts.prompt,
+        .choices = args.choices,
         .current_choice = 0,
     };
-    try render(state, writer);
-
-    var count = try reader.read(buf.writableSlice(0));
-    buf.update(count);
+    try render(state, tty);
 
     while (true) {
-        switch (try mibu.events.next(buf.readableSlice(0))) {
-            .none => {
-                buf.realign();
-                count = try reader.read(buf.writableSlice(0));
-                buf.update(count);
-            },
-            .not_supported => {
-                // std.log.err("Not supported byte sequence: {any}\r", .{buf.readableSlice(0)});
-                buf.discard(buf.count);
-            },
-            .incomplete => {
-                buf.realign();
-                count = try reader.read(buf.writableSlice(0));
-                buf.update(count);
-            },
-            .event => |ev| {
-                buf.discard(ev.bytes_read);
-                switch (try handle_event(ev.event, &state, writer)) {
-                    .Done => |v| return v,
-                    .Continue => {},
-                }
-            },
+        var ev = try user_input.next();
+        switch (try handle_event(ev, &state, tty)) {
+            .Done => |choice| return choice,
+            .Continue => {},
         }
     }
 }
@@ -88,17 +76,17 @@ const EventResponse = union(enum) {
     Continue,
 };
 
-fn handle_event(ev: mibu.events.Event, state: *RenderInfo, writer: anytype) !EventResponse {
+fn handle_event(ev: mibu.events.Event, state: *RenderInfo, tty: std.fs.File) !EventResponse {
     return switch (ev.key) {
         .ctrlC, .escape => .{ .Done = null },
         .up => {
             state.up();
-            try re_render(state.*, writer);
+            try re_render(state.*, tty);
             return .Continue;
         },
         .down => {
             state.down();
-            try re_render(state.*, writer);
+            try re_render(state.*, tty);
             return .Continue;
         },
         .ctrlM, .ctrlJ => .{ .Done = state.get_choice() },
@@ -107,12 +95,12 @@ fn handle_event(ev: mibu.events.Event, state: *RenderInfo, writer: anytype) !Eve
             ' ' => EventResponse{ .Done = state.get_choice() },
             'j' => {
                 state.down();
-                try re_render(state.*, writer);
+                try re_render(state.*, tty);
                 return .Continue;
             },
             'k' => {
                 state.up();
-                try re_render(state.*, writer);
+                try re_render(state.*, tty);
                 return .Continue;
             },
             else => .Continue,
@@ -121,64 +109,18 @@ fn handle_event(ev: mibu.events.Event, state: *RenderInfo, writer: anytype) !Eve
     };
 }
 
-fn render(state: RenderInfo, writer: anytype) !void {
+fn render(state: RenderInfo, tty: std.fs.File) !void {
+    var writer = tty.writer();
     try state.write_prompt(writer);
     try state.write_choices(writer);
 }
-fn re_render(state: RenderInfo, writer: anytype) !void {
-    var rendered_choice_height = state.choice_height(try mibu.term.getSize());
+fn re_render(state: RenderInfo, tty: std.fs.File) !void {
+    var writer = tty.writer();
+    var rendered_choice_height = state.choice_height(try mibu.term.getSizeFd(tty.handle));
     try writer.writeByte('\r');
     try writer.writeAll(mibu.cursor.goUp(rendered_choice_height));
     try writer.writeAll(mibu.clear.screen_from_cursor);
     try state.write_choices(writer);
-}
-
-fn research_reads() !void {
-    var tty = try std.fs.openFileAbsolute("/dev/tty", .{ .read = true, .write = true });
-    var raw = try mibu.term.RawTerm.enableRawMode(tty.handle, .blocking);
-    defer raw.disableRawMode() catch {};
-
-    var buf: [20]u8 = undefined;
-
-    while (true) {
-        std.log.err("\r\nBlocking read...\r\n", .{});
-        var bytes = try tty.read(&buf);
-        std.log.err("\r\nGot {} bytes: {any}\r\n", .{ bytes, buf[0..bytes] });
-        std.log.err("\r\nsleeping...\r\n", .{});
-        std.time.sleep(std.time.ns_per_s * 2);
-        std.log.err("\r\npost-sleep read...\r\n", .{});
-        bytes = try tty.read(&buf);
-        std.log.err("\r\nGot {} bytes: {any}\r\n", .{ bytes, buf[0..bytes] });
-    }
-}
-
-fn present_choice(args: Args) !?[]const u8 {
-    _ = args;
-
-    var tty = try std.fs.openFileAbsolute("/dev/tty", .{ .read = true, .write = true });
-    var raw = try mibu.term.RawTerm.enableRawMode(tty.handle, .blocking);
-    defer raw.disableRawMode() catch {};
-
-    while (mibu.events.next(tty)) |ev| {
-        switch (ev) {
-            .key => |key| {
-                switch (key) {
-                    .ctrlC, .escape => {
-                        return null;
-                    },
-                    .ctrlM => { // Enter/return
-                        return "chose";
-                    },
-                    else => {
-                        std.log.err("key event: {}\r", .{ev});
-                    },
-                }
-            },
-            else => std.log.err("unsupported event\r", .{}),
-        }
-    } else |_| {}
-
-    return null;
 }
 
 // Caller owns the memory
