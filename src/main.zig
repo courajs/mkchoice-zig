@@ -4,7 +4,7 @@ const args_parser = @import("args"); // https://github.com/MasterQ32/zig-args
 
 const Alloc = std.mem.Allocator;
 
-pub fn main() anyerror!void {
+pub fn main() anyerror!u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
@@ -22,10 +22,10 @@ pub fn main() anyerror!void {
     var choice = try do_term_stuff();
     if (choice) |c| {
         try std.io.getStdOut().writeAll(c);
+        return 0;
     } else {
-        std.process.exit(1);
+        return 1;
     }
-    // try research_reads();
 }
 
 // todo:
