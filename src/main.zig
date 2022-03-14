@@ -74,35 +74,51 @@ fn do_term_stuff() !?[]const u8 {
             },
             .event => |ev| {
                 buf.discard(ev.bytes_read);
-                switch (ev.event.key) {
-                    .ctrlC => return null,
-                    .escape => return null,
-                    .up => {
-                        state.up();
-                        try re_render(state, writer);
-                    },
-                    .down => {
-                        state.down();
-                        try re_render(state, writer);
-                    },
-                    .ctrlM, .ctrlJ => return state.get_choice(),
-                    .char => |c| switch (c) {
-                        ' ' => return state.get_choice(),
-                        'j' => {
-                            state.down();
-                            try re_render(state, writer);
-                        },
-                        'k' => {
-                            state.up();
-                            try re_render(state, writer);
-                        },
-                        else => {},
-                    },
-                    else => {},
+                switch (try handle_event(ev.event, &state, writer)) {
+                    .Done => |v| return v,
+                    .Continue => {},
                 }
             },
         }
     }
+}
+
+const EventResponse = union(enum) {
+    Done: ?[]const u8,
+    Continue,
+};
+
+fn handle_event(ev: mibu.events.Event, state: *RenderInfo, writer: anytype) !EventResponse {
+    return switch (ev.key) {
+        .ctrlC, .escape => .{ .Done = null },
+        .up => {
+            state.up();
+            try re_render(state.*, writer);
+            return .Continue;
+        },
+        .down => {
+            state.down();
+            try re_render(state.*, writer);
+            return .Continue;
+        },
+        .ctrlM, .ctrlJ => .{ .Done = state.get_choice() },
+        .char => |c| switch (c) {
+            'q' => EventResponse{ .Done = null },
+            ' ' => EventResponse{ .Done = state.get_choice() },
+            'j' => {
+                state.down();
+                try re_render(state.*, writer);
+                return .Continue;
+            },
+            'k' => {
+                state.up();
+                try re_render(state.*, writer);
+                return .Continue;
+            },
+            else => .Continue,
+        },
+        else => .Continue,
+    };
 }
 
 fn render(state: RenderInfo, writer: anytype) !void {
