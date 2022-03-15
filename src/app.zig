@@ -132,6 +132,7 @@ pub const App = struct {
         \\    z
         \\  $ cat some-file
         \\  main
+        \\
     ;
 
     pub fn run(params: Parameters) !u8 {
@@ -146,16 +147,20 @@ pub const App = struct {
         };
         var user_events = try input.RawInputReader.init(app.tty);
         defer user_events.deinit() catch {};
-        defer app.vanish() catch {};
 
         try app.first_render();
 
         while (true) {
             switch (app.handle_user_input(try user_events.next())) {
                 .next => {},
-                .cancel => return 1,
+                .cancel => {
+                    try app.vanish();
+                    return 1;
+                },
                 .choice => |c| {
+                    try app.vanish();
                     try std.io.getStdOut().writeAll(c);
+                    try std.io.getStdOut().writeAll("\n");
                     return 0;
                 },
                 .update => |s| {
