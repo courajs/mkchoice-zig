@@ -139,7 +139,7 @@ pub const App = struct {
         \\
     ;
 
-    pub fn run(params: Parameters) !u8 {
+    pub fn run(params: Parameters, alloc: std.mem.Allocator) !u8 {
         if (params.opts.help) {
             try std.io.getStdErr().writeAll(help_text);
             return 0;
@@ -164,6 +164,9 @@ pub const App = struct {
                 .choice => |c| {
                     try app.vanish();
                     try user_events.deinit();
+                    var s = try std.fmt.allocPrint(alloc, "{s}\n", .{c});
+                    defer alloc.free(s);
+                    try std.io.getStdOut().writeAll(s);
                     return 0;
                 },
                 .update => |s| {

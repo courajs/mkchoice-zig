@@ -10,7 +10,7 @@ pub fn main() anyerror!u8 {
     var alloc = arena.allocator();
 
     var params = try app.load_parameters(alloc);
-    return app.App.run(params);
+    return app.App.run(params, alloc);
 }
 
 // todo:
