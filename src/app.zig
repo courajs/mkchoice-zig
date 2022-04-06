@@ -141,7 +141,7 @@ pub const App = struct {
 
     pub fn run(params: Parameters) !u8 {
         if (params.opts.help) {
-            try std.io.getStdOut().writeAll(help_text);
+            try std.io.getStdErr().writeAll(help_text);
             return 0;
         }
         var app = App{
