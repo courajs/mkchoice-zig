@@ -150,7 +150,6 @@ pub const App = struct {
             .tty = try std.fs.openFileAbsolute("/dev/tty", .{ .read = true, .write = true }),
         };
         var user_events = try input.RawInputReader.init(app.tty);
-        defer user_events.deinit() catch {};
 
         try app.first_render();
 
@@ -159,12 +158,12 @@ pub const App = struct {
                 .next => {},
                 .cancel => {
                     try app.vanish();
+                    try user_events.deinit();
                     return 1;
                 },
                 .choice => |c| {
                     try app.vanish();
-                    try std.io.getStdOut().writeAll(c);
-                    try std.io.getStdOut().writeAll("\n");
+                    try user_events.deinit();
                     return 0;
                 },
                 .update => |s| {
