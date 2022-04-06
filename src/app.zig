@@ -46,7 +46,7 @@ pub fn load_parameters(alloc: std.mem.Allocator) !Parameters {
         }
     }
     // If no positional arguments, default read from stdin for options
-    if (args.positionals.len == 0) {
+    if (args.positionals.len == 0 and !args.options.help) {
         choices = try get_stdin_lines_alloc(alloc);
     }
     return Parameters{
